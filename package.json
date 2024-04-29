@@ -1,9 +1,21 @@
 {
   "name": "cloudflare-workers-sse",
   "version": "1.0.0",
-  "description": "",
-  "scripts": {},
-  "keywords": [],
-  "author": "",
-  "license": "MIT"
+  "description": "A high-level wrapper designed to facilitate Server-Sent Events with Cloudflare Workers",
+  "type": "module",
+  "module": "dist/index.js",
+  "scripts": {
+    "check": "bunx biome check --apply ./src",
+    "test": "bun test",
+    "build": "bun ./scripts/build.ts",
+    "install-hooks": "lefthook install"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.7.1",
+    "@cloudflare/workers-types": "4.20240423.0",
+    "@types/bun": "latest",
+    "bun-plugin-dts": "^0.2.3",
+    "lefthook": "^1.6.10",
+    "typescript": "^5.4.5"
+  }
 }
