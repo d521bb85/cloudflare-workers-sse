@@ -50,7 +50,7 @@ async function run<Env, CfHostMetadata>(
   const writer = writableStream.getWriter();
   try {
     for await (const event of sseHandler(request, env, ctx)) {
-      writer.write(encodeEvent(event));
+      await writer.write(encodeEvent(event));
     }
   } finally {
     await writer.close();

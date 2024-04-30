@@ -1,4 +1,4 @@
-```typecript
+```typescript
 import { sse } from "cloudflare-workers-sse";
 
 export default {
