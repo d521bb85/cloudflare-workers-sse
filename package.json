@@ -6,9 +6,9 @@
   "module": "dist/index.js",
   "scripts": {
     "check": "bunx biome check --apply ./src",
-    "test": "bun test",
+    "test": "bun run build && bun test",
     "build": "bun ./scripts/build.ts",
-    "install-hooks": "lefthook install"
+    "install-hooks": "bunx lefthook install"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.7.1",
@@ -16,6 +16,7 @@
     "@types/bun": "latest",
     "bun-plugin-dts": "^0.2.3",
     "lefthook": "^1.6.10",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "wrangler": "^3.52.0"
   }
 }
