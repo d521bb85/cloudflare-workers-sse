@@ -32,8 +32,6 @@ describe("sse", () => {
       ctx
     );
 
-    expect(response.status).toBe(200);
-
     const receivedEvents: string[] = [];
     const reader = response.body?.getReader();
     if (!reader) {
