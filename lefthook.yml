@@ -1,6 +1,4 @@
 pre-commit:
   commands:
     check:
-      run: bun run check
-    test:
-      run: bun run test
+      run: npm run check

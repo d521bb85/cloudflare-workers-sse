@@ -5,18 +5,16 @@
   "type": "module",
   "module": "dist/index.js",
   "scripts": {
-    "check": "bunx biome check --apply ./src",
-    "test": "bun run build && bun test",
-    "build": "bun ./scripts/build.ts",
-    "install-hooks": "bunx lefthook install"
+    "install-hooks": "lefthook install",
+    "check": "biome check --write ./src",
+    "clean": "rimraf ./dist",
+    "build": "npm run clean && tsc"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.7.1",
-    "@cloudflare/workers-types": "4.20240423.0",
-    "@types/bun": "latest",
-    "bun-plugin-dts": "^0.2.3",
-    "lefthook": "^1.6.10",
-    "typescript": "^5.4.5",
-    "wrangler": "^3.52.0"
+    "@biomejs/biome": "^1.8.1",
+    "@cloudflare/workers-types": "^4.20240423.0",
+    "lefthook": "^1.6.15",
+    "rimraf": "^5.0.7",
+    "typescript": "^5.4.5"
   }
 }
