@@ -49,13 +49,13 @@ describe("sse", () => {
       receivedEvents.push(event);
     }
 
+    await waitOnExecutionContext(ctx);
+
     expect(receivedEvents).toEqual([
       "id: 854426ea-63a9-44ca-b569-7a59192743a1\nevent: terminal_countdown\ndata: null\n\n",
       'id: 98f6ade1-a75d-40f9-83b8-50f519c68e7b\nevent: ignition\ndata: "check"\n\n',
       'id: f34853b5-c6bb-462a-8add-8ae84afecc36\nevent: liftoff\ndata: {"engines":["full_thrust","full_thrust","full_thrust"]}\n\n',
     ]);
-
-    await waitOnExecutionContext(ctx);
   });
 
   it("writes custom headers to the response", async () => {
