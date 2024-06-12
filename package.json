@@ -33,7 +33,7 @@
     "test": "vitest run",
     "clean": "rimraf ./dist",
     "build": "npm run clean && tsc --outDir ./dist",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run check && npm run test && npm run build"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.8.1",
