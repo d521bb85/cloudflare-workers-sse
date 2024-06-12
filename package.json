@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.",
   "keywords": [
     "cloudflare",

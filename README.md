@@ -4,7 +4,7 @@ Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.
 
 - Offers a simple, straightforward, and functional approach to streaming events using async generators.
 - Easily integrates with existing Workers.
-- Works seamlessly with [OpenAI](https://github.com/openai/openai-node) streaming.
+- Works seamlessly with [OpenAI](https://github.com/openai/openai-node?tab=readme-ov-file#streaming-responses) streaming.
 
 ## Installation
 
