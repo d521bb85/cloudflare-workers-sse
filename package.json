@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.",
   "keywords": [
     "cloudflare",
@@ -32,7 +32,8 @@
     "check": "biome check --write ./src",
     "test": "vitest run",
     "clean": "rimraf ./dist",
-    "build": "npm run clean && tsc --outDir ./dist"
+    "build": "npm run clean && tsc --outDir ./dist",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.8.1",

@@ -8,7 +8,7 @@ import type { JsonValue } from "type-fest";
 export type SSEHandler<Env = unknown, CfHostMetadata = unknown> = (
   request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
 ) => AsyncGenerator<SSEEvent, void, void>;
 
 export interface SSEEvent {
@@ -23,7 +23,7 @@ export interface SSEOptions {
 
 export function sse<Env = unknown, CfHostMetadata = unknown>(
   sseHandler: SSEHandler<Env, CfHostMetadata>,
-  options?: SSEOptions
+  options?: SSEOptions,
 ): ExportedHandlerFetchHandler<Env, CfHostMetadata> {
   const stream = new TransformStream();
 
@@ -33,7 +33,7 @@ export function sse<Env = unknown, CfHostMetadata = unknown>(
       IncomingRequestCfProperties<CfHostMetadata>
     >,
     env: Env,
-    ctx: ExecutionContext
+    ctx: ExecutionContext,
   ) {
     const writer = stream.writable.getWriter();
     try {
@@ -56,7 +56,7 @@ export function sse<Env = unknown, CfHostMetadata = unknown>(
       IncomingRequestCfProperties<CfHostMetadata>
     >,
     env: Env,
-    ctx: ExecutionContext
+    ctx: ExecutionContext,
   ): Promise<Response> {
     ctx.waitUntil(run(request, env, ctx));
     return new Response(stream.readable, {
