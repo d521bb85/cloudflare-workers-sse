@@ -14,7 +14,7 @@ export type SSEHandler<Env = unknown, CfHostMetadata = unknown> = (
 export interface SSEEvent {
   id?: string;
   event?: string;
-  data: JsonValue;
+  data?: JsonValue;
 }
 
 export interface SSEOptions {
@@ -80,6 +80,6 @@ function encodeEvent(event: SSEEvent): Uint8Array {
   if (event.event) {
     payload += `event: ${event.event}\n`;
   }
-  payload += `data: ${JSON.stringify(event.data)}\n\n`;
+  payload += `data: ${JSON.stringify(event.data ?? null)}\n\n`;
   return textEncoder.encode(payload);
 }

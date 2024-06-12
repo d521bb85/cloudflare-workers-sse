@@ -12,7 +12,6 @@ describe("sse", () => {
       yield {
         id: "854426ea-63a9-44ca-b569-7a59192743a1",
         event: "terminal_countdown",
-        data: null,
       };
       yield {
         id: "98f6ade1-a75d-40f9-83b8-50f519c68e7b",
@@ -57,5 +56,26 @@ describe("sse", () => {
     ]);
 
     await waitOnExecutionContext(ctx);
+  });
+
+  it("writes custom headers to the response", async () => {
+    const fetchHandler = sse(
+      async function* () {
+        yield { event: "pong" };
+      },
+      { customHeaders: { "Access-Control-Allow-Origin": "*" } }
+    );
+
+    const ctx = createExecutionContext();
+    const response = await fetchHandler(
+      new Request("http://example.com"),
+      env,
+      ctx
+    );
+
+    await response.text();
+    await waitOnExecutionContext(ctx);
+
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 });

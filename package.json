@@ -1,9 +1,31 @@
 {
   "name": "cloudflare-workers-sse",
   "version": "1.0.0",
-  "description": "An elegant, high-level wrapper designed to facilitate Server-Sent Events with Cloudflare Workers",
+  "description": "Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.",
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "sse",
+    "server-sent-events",
+    "streaming"
+  ],
+  "author": "Vladimir Ivanenko <d521bb85@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/d521bb85/cloudflare-workers-sse",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/d521bb85/cloudflare-workers-sse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/d521bb85/cloudflare-workers-sse/issues"
+  },
   "type": "module",
+  "main": "dist/index.js",
   "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "install-hooks": "lefthook install",
     "dev": "vitest",
