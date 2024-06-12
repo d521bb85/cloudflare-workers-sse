@@ -4,17 +4,14 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleDetection": "force",
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "verbatimModuleSyntax": true,
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "types": ["@cloudflare/workers-types"],
-    "rootDir": "./src", 
-    "outDir": "./dist",
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["./src/**/*.ts"],
-  "exclude": ["node_modules", "dist"] 
+  "include": ["./src/**/*.ts"]
 }

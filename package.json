@@ -1,20 +1,28 @@
 {
   "name": "cloudflare-workers-sse",
   "version": "1.0.0",
-  "description": "A high-level wrapper designed to facilitate Server-Sent Events with Cloudflare Workers",
+  "description": "An elegant, high-level wrapper designed to facilitate Server-Sent Events with Cloudflare Workers",
   "type": "module",
   "module": "dist/index.js",
   "scripts": {
     "install-hooks": "lefthook install",
+    "dev": "vitest",
     "check": "biome check --write ./src",
+    "test": "vitest run",
     "clean": "rimraf ./dist",
-    "build": "npm run clean && tsc"
+    "build": "npm run clean && tsc --outDir ./dist"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.8.1",
+    "@cloudflare/vitest-pool-workers": "^0.4.4",
     "@cloudflare/workers-types": "^4.20240423.0",
     "lefthook": "^1.6.15",
+    "miniflare": "^3.20240605.0",
     "rimraf": "^5.0.7",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "1.5.0"
+  },
+  "dependencies": {
+    "type-fest": "^4.20.0"
   }
 }

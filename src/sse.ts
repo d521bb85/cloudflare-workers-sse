@@ -1,60 +1,73 @@
-import {
-  type ExportedHandlerFetchHandler,
-  type IncomingRequestCfProperties,
-  type Request,
-  Response,
+import type {
+  ExportedHandlerFetchHandler,
+  IncomingRequestCfProperties,
+  Request,
 } from "@cloudflare/workers-types";
+import type { JsonValue } from "type-fest";
 
-export type SSEFetchHandler<
-  Env = unknown,
-  CfHostMetadata = unknown,
-  TReturn = unknown,
-  TNext = unknown,
-> = (
+export type SSEHandler<Env = unknown, CfHostMetadata = unknown> = (
   request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
   env: Env,
-  ctx: ExecutionContext,
-) => AsyncGenerator<SSEEvent, TReturn, TNext>;
+  ctx: ExecutionContext
+) => AsyncGenerator<SSEEvent, void, void>;
 
 export interface SSEEvent {
   id?: string;
   event?: string;
-  data: string;
+  data: JsonValue;
+}
+
+export interface SSEOptions {
+  customHeaders?: { [K in string]: string };
 }
 
 export function sse<Env = unknown, CfHostMetadata = unknown>(
-  sseHandler: SSEFetchHandler<Env, CfHostMetadata>,
+  sseHandler: SSEHandler<Env, CfHostMetadata>,
+  options?: SSEOptions
 ): ExportedHandlerFetchHandler<Env, CfHostMetadata> {
-  return async function handler(
+  const stream = new TransformStream();
+
+  async function run(
     request: Request<
       CfHostMetadata,
       IncomingRequestCfProperties<CfHostMetadata>
     >,
     env: Env,
-    ctx: ExecutionContext,
-  ): Promise<Response> {
-    const stream = new TransformStream();
-    const completed = run(sseHandler, stream.writable, request, env, ctx);
-    ctx.waitUntil(completed);
-    return createResponse(stream.readable);
-  };
-}
-
-async function run<Env, CfHostMetadata>(
-  sseHandler: SSEFetchHandler<Env, CfHostMetadata>,
-  writableStream: WritableStream,
-  request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
-  env: Env,
-  ctx: ExecutionContext,
-) {
-  const writer = writableStream.getWriter();
-  try {
-    for await (const event of sseHandler(request, env, ctx)) {
-      await writer.write(encodeEvent(event));
+    ctx: ExecutionContext
+  ) {
+    const writer = stream.writable.getWriter();
+    try {
+      for await (const event of sseHandler(request, env, ctx)) {
+        await writer.write(encodeEvent(event));
+      }
+    } finally {
+      await writer.close();
     }
-  } finally {
-    await writer.close();
   }
+
+  /*
+    The fetch handler is synchronous and returns a response with a stream as its body.
+    The run function, which is called within, runs the given sseHandler generator and writes the events it produces to the stream.
+    Calling ctx.waitUntil ensures that execution won't terminate until the generator is exhausted.
+  */
+  return async function fetchHandler(
+    request: Request<
+      CfHostMetadata,
+      IncomingRequestCfProperties<CfHostMetadata>
+    >,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
+    ctx.waitUntil(run(request, env, ctx));
+    return new Response(stream.readable, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        ...(options?.customHeaders ?? {}),
+      },
+    });
+  };
 }
 
 const textEncoder = new TextEncoder();
@@ -69,15 +82,4 @@ function encodeEvent(event: SSEEvent): Uint8Array {
   }
   payload += `data: ${JSON.stringify(event.data)}\n\n`;
   return textEncoder.encode(payload);
-}
-
-function createResponse(readableStream: ReadableStream): Response {
-  const headers = new Headers();
-  headers.append("Content-Type", "text/event-stream");
-  headers.append("Cache-Control", "no-cache");
-  headers.append("Connection", "keep-alive");
-  return new Response(readableStream, {
-    headers,
-    status: 200,
-  });
 }

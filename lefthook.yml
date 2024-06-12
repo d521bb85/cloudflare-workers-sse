@@ -2,3 +2,5 @@ pre-commit:
   commands:
     check:
       run: npm run check
+    test:
+      run: npm run test
