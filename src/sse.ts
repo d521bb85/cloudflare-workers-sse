@@ -1,85 +1,154 @@
-import type {
-  ExportedHandlerFetchHandler,
-  IncomingRequestCfProperties,
-  Request,
-} from "@cloudflare/workers-types";
-import type { JsonValue } from "type-fest";
+import type { Jsonifiable } from "type-fest";
 
-export type SSEHandler<Env = unknown, CfHostMetadata = unknown> = (
-  request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
+export type SSEHandler<Env> = (
+  request: Request,
   env: Env,
-  ctx: ExecutionContext,
-) => AsyncGenerator<SSEEvent, void, void>;
+  ctx: ExecutionContext
+) => SSEMessageAsyncGenerator;
 
-export interface SSEEvent {
+export type SSEMessageAsyncGenerator = AsyncGenerator<SSEMessage, void, void>;
+
+export interface SSEMessage {
   id?: string;
   event?: string;
-  data?: JsonValue;
+  data?: null | boolean | number | bigint | string | Jsonifiable;
 }
 
-export interface SSEOptions {
+export interface SSEOptions<Env> {
+  /**
+   * Custom headers to include in the SSE response.
+   *
+   * Allows adding extra headers (e.g., CORS, security policies) as needed.
+   */
   customHeaders?: { [K in string]: string };
+  /**
+   * Optional error handler.
+   *
+   * Invoked when an error occurs during streaming.
+   * Can return an SSE message to send to the client.
+   */
+  onError?: OnErrorFunction<Env>;
 }
 
-export function sse<Env = unknown, CfHostMetadata = unknown>(
-  sseHandler: SSEHandler<Env, CfHostMetadata>,
-  options?: SSEOptions,
-): ExportedHandlerFetchHandler<Env, CfHostMetadata> {
-  const stream = new TransformStream();
+export type OnErrorFunction<Env> = (
+  error: unknown,
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext
+) => SSEMessage | undefined | Promise<SSEMessage | undefined>;
 
-  async function run(
-    request: Request<
-      CfHostMetadata,
-      IncomingRequestCfProperties<CfHostMetadata>
-    >,
+export type FetchHandler<Env> = (
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext
+) => Response | Promise<Response>;
+
+type BoundOnErrorFunction = (
+  error: unknown
+) => ReturnType<OnErrorFunction<unknown>>;
+
+/**
+ * Creates a fetch handler that returns a streaming response using Server-Sent Events.
+ *
+ * The response body is a readable stream that transmits SSE messages to the client.
+ * The connection remains open until all messages are dispatched and the stream is closed.
+ */
+export function sse<Env>(
+  sseHandler: SSEHandler<Env>,
+  options?: SSEOptions<Env>
+): FetchHandler<Env> {
+  return function fetchHandler(
+    request: Request,
     env: Env,
-    ctx: ExecutionContext,
+    ctx: ExecutionContext
   ) {
-    const writer = stream.writable.getWriter();
-    try {
-      for await (const event of sseHandler(request, env, ctx)) {
-        await writer.write(encodeEvent(event));
-      }
-    } finally {
-      await writer.close();
-    }
-  }
+    const onError = (error: unknown) =>
+      options?.onError?.(error, request, env, ctx);
 
-  /*
-    The fetch handler is synchronous and returns a response with a stream as its body.
-    The run function, which is called within, runs the given sseHandler generator and writes the events it produces to the stream.
-    Calling ctx.waitUntil ensures that execution won't terminate until the generator is exhausted.
-  */
-  return async function fetchHandler(
-    request: Request<
-      CfHostMetadata,
-      IncomingRequestCfProperties<CfHostMetadata>
-    >,
-    env: Env,
-    ctx: ExecutionContext,
-  ): Promise<Response> {
-    ctx.waitUntil(run(request, env, ctx));
+    const stream = createSSEStream(onError);
+    writeMessages(stream, sseHandler(request, env, ctx), onError);
+
     return new Response(stream.readable, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        ...(options?.customHeaders ?? {}),
-      },
+        ...(options?.customHeaders ?? {})
+      }
     });
   };
 }
 
+type SSEStream = TransformStream<SSEMessage, Uint8Array>;
+
+function createSSEStream(onError: BoundOnErrorFunction): SSEStream {
+  return new TransformStream<SSEMessage, Uint8Array>({
+    async transform(message, controller) {
+      try {
+        const serialized = serializeMessage(message);
+        controller.enqueue(serialized);
+      } catch (error) {
+        const errorMessage = await onError(error);
+
+        if (errorMessage) {
+          const serializedError = serializeMessage(errorMessage);
+          controller.enqueue(serializedError);
+        }
+
+        controller.terminate();
+      }
+    }
+  });
+}
+
 const textEncoder = new TextEncoder();
 
-function encodeEvent(event: SSEEvent): Uint8Array {
-  let payload = "";
-  if (event.id) {
-    payload = `id: ${event.id}\n`;
+function serializeMessage(message: SSEMessage) {
+  let serialized = "";
+
+  if (message.id) {
+    serialized += `id: ${message.id}\n`;
   }
-  if (event.event) {
-    payload += `event: ${event.event}\n`;
+
+  if (message.event) {
+    serialized += `event: ${message.event}\n`;
   }
-  payload += `data: ${JSON.stringify(event.data ?? null)}\n\n`;
-  return textEncoder.encode(payload);
+
+  if (message.data === null || message.data === undefined) {
+    serialized += "data:";
+  } else {
+    const stringifiedData =
+      typeof message.data === "object"
+        ? JSON.stringify(message.data)
+        : message.data.toString();
+
+    serialized += stringifiedData
+      .split("\n")
+      .map((line) => `data: ${line}`)
+      .join("\n");
+  }
+
+  serialized += "\n\n";
+  return textEncoder.encode(serialized);
+}
+
+async function writeMessages(
+  stream: SSEStream,
+  generator: SSEMessageAsyncGenerator,
+  onError: BoundOnErrorFunction
+) {
+  const writer = stream.writable.getWriter();
+
+  try {
+    for await (const message of generator) {
+      await writer.write(message);
+    }
+  } catch (error) {
+    const errorMessage = await onError(error);
+    if (errorMessage) {
+      await writer.write(errorMessage);
+    }
+  } finally {
+    await writer.close();
+  }
 }

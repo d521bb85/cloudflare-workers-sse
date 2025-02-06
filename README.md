@@ -1,10 +1,12 @@
 # cloudflare-workers-sse
 
-Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.
+Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.
 
-- Offers a simple, straightforward, and functional approach to streaming events using async generators.
-- Easily integrates with existing Workers.
-- Works seamlessly with [OpenAI](https://github.com/openai/openai-node?tab=readme-ov-file#streaming-responses) streaming.
+- Provides a simple, straightforward, and functional approach to streaming SSE messages using async generators.  
+- Easily integrates with existing Workers.  
+- Works seamlessly with [OpenAI streaming](https://github.com/openai/openai-node?tab=readme-ov-file#streaming-responses).  
+- Adheres to the [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html) and is thoroughly tested.  
+
 
 ## Installation
 
@@ -32,45 +34,108 @@ With Bun
 bun add cloudflare-workers-sse
 ```
 
+
 ## Usage
 
-A worker implementation:
+The implementation of SSE involves two components: a client that receives messages and a server (in this case, a worker) that publishes them.
+
+Let's start with the worker.
 
 ```typescript
 import { sse } from "cloudflare-workers-sse";
 
 export default {
-  fetch: sse(handle),
+  fetch: sse(handler)
 };
 
-async function* handle(request: Request, env: Env, ctx: ExecutionContext) {
+async function* handler(request: Request, env: Env, ctx: ExecutionContext) {
   yield {
     event: "greeting",
-    data: { message: "Hello, World!" },
+    data: { text: "Hi there!" }
   };
+}
+
+```
+
+And that's basically it. All messages yielded are streamed to a client listening for them. Once there are no more messages, the stream is closed.
+
+Although the simplest client-side implementation can be achieved using `EventSource`, for more advanced scenarios — such as using `POST` requests or handling authentication — it is recommended to use libraries such as [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source).
+
+```typescript
+const eventSource = new EventSource("https://<YOUR_WORKER_SUBDOMAIN>.workers.dev");
+eventSource.addEventListener("greeting", (event) => {
+  // handle the greeting message
+});
+
+```
+
+
+### Message Type
+
+All messages yielded by a handler should conform to the `SSEMessage` interface.
+
+```typescript
+interface SSEMessage {
+  id?: string;
+  event?: string;
+  data?: null | boolean | number | bigint | string | Jsonifiable;
 }
 ```
 
-And a sample client code consuming the events:
+`data` is optional and can be any primitive type (except `Symbol`) or an object, in which case it will be converted to JSON. More information about `Jsonifiable` can be found [here](https://github.com/sindresorhus/type-fest/blob/main/source/jsonifiable.d.ts). If data is omitted or set to `undefined` or `null`, the empty `data` field will be added. 
+
+
+### Handling Errors
+
+Errors thrown by a handler can be caught using the `onError` callback, which can also return a message to be streamed to the client before closing the stream.
 
 ```typescript
-const eventSource = new EventSource("https://your-worker.com");
-eventSource.addEventListener("greeting", (event) => {
-  const data = JSON.parse(event.data);
-  console.log(data);
-});
+import { sse } from "cloudflare-workers-sse";
+
+export default {
+  fetch: sse(handler, {
+    onError: (error, request, env, ctx) => ({ event: "error_occurred" })
+  })
+}
 ```
 
 ### Custom Headers
 
-By default only essential headers such as "Content-Type", "Cache-Control", and "Connection" are set.
-
-You can add additional headers using the `customHeaders` option.
-
-Example:
+By default, only essential headers such as `Content-Type`, `Cache-Control`, and `Connection` are included in the response. To send additional headers, use the `customHeaders` option.
 
 ```typescript
-sse(handle, {
-  customHeaders: { "Access-Control-Allow-Origin": "*" },
-});
+import { sse } from "cloudflare-workers-sse";
+
+export default {
+  fetch: sse(handler, {
+    customHeaders: { "access-control-allow-origin": "https://example.com" }
+  })
+}
+```
+
+### Middleware
+
+If your worker requires additional logic — such as request validation, response modification, or other pre/post-processing — you can implement a middleware.
+
+```typescript
+import { type FetchHandler, sse } from "cloudflare-workers-sse";
+
+export default {
+  fetch: middleware(sse(handler))
+}
+
+function middleware<Env>(
+  nextHandler: FetchHandler<Env>
+): FetchHandler<Env> {
+  return async function middlewareHandler(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ) {
+    // a before logic
+    const response = await nextHandler(request, env, ctx);
+    // an after logic
+    return response; 
+  };
+}
 ```

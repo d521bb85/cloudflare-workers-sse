@@ -1,7 +1,7 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "1.0.3",
-  "description": "Elegant Server-Sent Events (SSE) steaming implementation for Cloudflare Workers.",
+  "version": "2.0.0",
+  "description": "Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.",
   "keywords": [
     "cloudflare",
     "workers",
@@ -23,29 +23,28 @@
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "install-hooks": "lefthook install",
     "dev": "vitest",
-    "check": "biome check --write ./src",
+    "check": "biome check --write .",
     "test": "vitest run",
     "clean": "rimraf ./dist",
     "build": "npm run clean && tsc --outDir ./dist",
     "prepublishOnly": "npm run check && npm run test && npm run build"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.8.1",
-    "@cloudflare/vitest-pool-workers": "^0.4.4",
-    "@cloudflare/workers-types": "^4.20240423.0",
-    "lefthook": "^1.6.15",
-    "miniflare": "^3.20240605.0",
-    "rimraf": "^5.0.7",
-    "typescript": "^5.4.5",
-    "vitest": "1.5.0"
+    "@biomejs/biome": "^1.9.4",
+    "@cloudflare/vitest-pool-workers": "^0.6.12",
+    "@cloudflare/workers-types": "^4.20250204.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "lefthook": "^1.10.10",
+    "miniflare": "^3.20250129.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
   },
   "dependencies": {
-    "type-fest": "^4.20.0"
+    "type-fest": "^4.33.0"
   }
 }
