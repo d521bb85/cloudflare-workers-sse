@@ -43,6 +43,10 @@ export type FetchHandler<Env> = (
   ctx: ExecutionContext
 ) => Response | Promise<Response>;
 
+type BoundOnErrorFunction = (
+  error: unknown
+) => ReturnType<OnErrorFunction<unknown>>;
+
 /**
  * Creates a fetch handler that returns a streaming response using Server-Sent Events.
  *
@@ -61,7 +65,7 @@ export function sse<Env>(
     const onError = (error: unknown) =>
       options?.onError?.(error, request, env, ctx);
 
-    const stream = createSSEStream();
+    const stream = createSSEStream(onError);
     writeMessages(stream, sseHandler(request, env, ctx), onError);
 
     return new Response(stream.readable, {
@@ -77,46 +81,61 @@ export function sse<Env>(
 
 type SSEStream = TransformStream<SSEMessage, Uint8Array>;
 
-function createSSEStream(): SSEStream {
-  const textEncoder = new TextEncoder();
-
+function createSSEStream(onError: BoundOnErrorFunction): SSEStream {
   return new TransformStream<SSEMessage, Uint8Array>({
-    transform(message, controller) {
-      let serialized = "";
+    async transform(message, controller) {
+      try {
+        const serialized = serializeMessage(message);
+        controller.enqueue(serialized);
+      } catch (error) {
+        const errorMessage = await onError(error);
 
-      if (message.id) {
-        serialized += `id: ${message.id}\n`;
+        if (errorMessage) {
+          const serializedError = serializeMessage(errorMessage);
+          controller.enqueue(serializedError);
+        }
+
+        controller.terminate();
       }
-
-      if (message.event) {
-        serialized += `event: ${message.event}\n`;
-      }
-
-      if (message.data === null || message.data === undefined) {
-        serialized += "data:";
-      } else {
-        const stringifiedData =
-          typeof message.data === "object"
-            ? JSON.stringify(message.data)
-            : message.data.toString();
-
-        serialized += stringifiedData
-          .split("\n")
-          .map((line) => `data: ${line}`)
-          .join("\n");
-      }
-
-      serialized += "\n\n";
-
-      controller.enqueue(textEncoder.encode(serialized));
     }
   });
+}
+
+const textEncoder = new TextEncoder();
+
+function serializeMessage(message: SSEMessage) {
+  let serialized = "";
+
+  if (message.id) {
+    serialized += `id: ${message.id}\n`;
+  }
+
+  if (message.event) {
+    serialized += `event: ${message.event}\n`;
+  }
+
+  if (message.data === null || message.data === undefined) {
+    serialized += "data:";
+  } else {
+    const stringifiedData =
+      typeof message.data === "object"
+        ? JSON.stringify(message.data)
+        : message.data.toString();
+
+    serialized += stringifiedData
+      .split("\n")
+      .map((line) => `data: ${line}`)
+      .join("\n");
+  }
+
+  serialized += "\n\n";
+  return textEncoder.encode(serialized);
 }
 
 async function writeMessages(
   stream: SSEStream,
   generator: SSEMessageAsyncGenerator,
-  onError: (error: unknown) => ReturnType<OnErrorFunction<unknown>>
+  onError: BoundOnErrorFunction
 ) {
   const writer = stream.writable.getWriter();
 

@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "2.0.0-alpha.2",
+  "version": "2.0.0-alpha.3",
   "description": "Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.",
   "keywords": [
     "cloudflare",
@@ -37,6 +37,7 @@
     "@biomejs/biome": "^1.9.4",
     "@cloudflare/vitest-pool-workers": "^0.6.12",
     "@cloudflare/workers-types": "^4.20250204.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "lefthook": "^1.10.10",
     "miniflare": "^3.20250129.0",
     "rimraf": "^6.0.1",

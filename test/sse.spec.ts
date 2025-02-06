@@ -171,10 +171,11 @@ data: ["Alice","Bob"]
     );
 
     const response = await fetchHandler(request, env, ctx);
-    await response.text();
+    const messages = await readResponseStream(response);
     await waitOnExecutionContext(ctx);
 
     expect(onError).toBeCalledWith(error, request, env, ctx);
+    expect(messages).toEqual(["data:\n\n"]);
   });
 
   it("writes a message returned from onError", async () => {
@@ -198,6 +199,33 @@ data: ["Alice","Bob"]
     await waitOnExecutionContext(ctx);
 
     expect(messages.at(-1)).toBe("event: error_occurred\ndata:\n\n");
+  });
+
+  it("calls onError when an error thrown during a message serialization", async () => {
+    const error = new Error();
+    const request = new Request("http://test.sse.workers.dev");
+    const ctx = createExecutionContext();
+
+    const onError = vi.fn();
+
+    const fetchHandler = sse(
+      async function* () {
+        yield {
+          data: {
+            toJSON() {
+              throw error;
+            }
+          }
+        };
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(request, env, ctx);
+    await response.text();
+    await waitOnExecutionContext(ctx);
+
+    expect(onError).toBeCalledWith(error, request, env, ctx);
   });
 });
 
