@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "2.0.0-alpha.1",
+  "version": "2.0.0-alpha.2",
   "description": "Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.",
   "keywords": [
     "cloudflare",

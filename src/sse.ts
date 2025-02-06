@@ -1,14 +1,9 @@
-import type {
-  ExportedHandlerFetchHandler,
-  IncomingRequestCfProperties,
-  Request,
-} from "@cloudflare/workers-types";
 import type { Jsonifiable } from "type-fest";
 
-export type SSEHandler<Env = unknown, CfHostMetadata = unknown> = (
-  request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
+export type SSEHandler<Env> = (
+  request: Request,
   env: Env,
-  ctx: ExecutionContext,
+  ctx: ExecutionContext
 ) => SSEMessageAsyncGenerator;
 
 export type SSEMessageAsyncGenerator = AsyncGenerator<SSEMessage, void, void>;
@@ -19,7 +14,7 @@ export interface SSEMessage {
   data?: null | boolean | number | bigint | string | Jsonifiable;
 }
 
-export interface SSEOptions<Env = unknown, CfHostMetadata = unknown> {
+export interface SSEOptions<Env> {
   /**
    * Custom headers to include in the SSE response.
    *
@@ -32,15 +27,21 @@ export interface SSEOptions<Env = unknown, CfHostMetadata = unknown> {
    * Invoked when an error occurs during streaming.
    * Can return an SSE message to send to the client.
    */
-  onError?: OnErrorFunction<Env, CfHostMetadata>;
+  onError?: OnErrorFunction<Env>;
 }
 
-export type OnErrorFunction<Env = unknown, CfHostMetadata = unknown> = (
+export type OnErrorFunction<Env> = (
   error: unknown,
-  request: Request<CfHostMetadata, IncomingRequestCfProperties<CfHostMetadata>>,
+  request: Request,
   env: Env,
-  ctx: ExecutionContext,
+  ctx: ExecutionContext
 ) => SSEMessage | undefined | Promise<SSEMessage | undefined>;
+
+export type FetchHandler<Env> = (
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext
+) => Response | Promise<Response>;
 
 /**
  * Creates a fetch handler that returns a streaming response using Server-Sent Events.
@@ -48,17 +49,14 @@ export type OnErrorFunction<Env = unknown, CfHostMetadata = unknown> = (
  * The response body is a readable stream that transmits SSE messages to the client.
  * The connection remains open until all messages are dispatched and the stream is closed.
  */
-export function sse<Env = unknown, CfHostMetadata = unknown>(
-  sseHandler: SSEHandler<Env, CfHostMetadata>,
-  options?: SSEOptions<Env, CfHostMetadata>,
-): ExportedHandlerFetchHandler<Env, CfHostMetadata> {
+export function sse<Env>(
+  sseHandler: SSEHandler<Env>,
+  options?: SSEOptions<Env>
+): FetchHandler<Env> {
   return function fetchHandler(
-    request: Request<
-      CfHostMetadata,
-      IncomingRequestCfProperties<CfHostMetadata>
-    >,
+    request: Request,
     env: Env,
-    ctx: ExecutionContext,
+    ctx: ExecutionContext
   ) {
     const onError = (error: unknown) =>
       options?.onError?.(error, request, env, ctx);
@@ -71,8 +69,8 @@ export function sse<Env = unknown, CfHostMetadata = unknown>(
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        ...(options?.customHeaders ?? {}),
-      },
+        ...(options?.customHeaders ?? {})
+      }
     });
   };
 }
@@ -111,14 +109,14 @@ function createSSEStream(): SSEStream {
       serialized += "\n\n";
 
       controller.enqueue(textEncoder.encode(serialized));
-    },
+    }
   });
 }
 
 async function writeMessages(
   stream: SSEStream,
   generator: SSEMessageAsyncGenerator,
-  onError: (error: unknown) => ReturnType<OnErrorFunction>,
+  onError: (error: unknown) => ReturnType<OnErrorFunction<unknown>>
 ) {
   const writer = stream.writable.getWriter();
 

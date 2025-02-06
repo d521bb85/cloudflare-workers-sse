@@ -1,10 +1,10 @@
 import {
   createExecutionContext,
   env,
-  waitOnExecutionContext,
+  waitOnExecutionContext
 } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import { sse } from "../src/sse";
+import { type FetchHandler, sse } from "../src/sse";
 
 describe("sse", () => {
   it("writes essential headers", async () => {
@@ -17,7 +17,7 @@ describe("sse", () => {
     const response = await fetchHandler(
       new Request("http://test.sse.workers.dev"),
       env,
-      ctx,
+      ctx
     );
 
     await waitOnExecutionContext(ctx);
@@ -37,15 +37,15 @@ describe("sse", () => {
       {
         customHeaders: {
           "access-control-allow-origin": "*",
-          "x-custom-header": "added",
-        },
-      },
+          "x-custom-header": "added"
+        }
+      }
     );
 
     const response = await fetchHandler(
       new Request("http://test.sse.workers.dev"),
       env,
-      ctx,
+      ctx
     );
 
     await waitOnExecutionContext(ctx);
@@ -70,14 +70,14 @@ describe("sse", () => {
       // with a data ommited
       yield {
         id: "98f6ade1-a75d-40f9-83b8-50f519c68e7b",
-        event: "ignition",
+        event: "ignition"
       };
 
       // with all fields
       yield {
         id: "f34853b5-c6bb-462a-8add-8ae84afecc36",
         event: "liftoff",
-        data: { engines: "OK" },
+        data: { engines: "OK" }
       };
 
       // with a primitive type data
@@ -96,8 +96,8 @@ describe("sse", () => {
       yield {
         data: {
           from: "Alice",
-          to: "Bob",
-        },
+          to: "Bob"
+        }
       };
 
       yield { data: ["Alice", "Bob"] };
@@ -106,7 +106,7 @@ describe("sse", () => {
     const response = await fetchHandler(
       new Request("http://test.sse.workers.dev"),
       env,
-      ctx,
+      ctx
     );
 
     const messages = await readResponseStream(response);
@@ -167,7 +167,7 @@ data: ["Alice","Bob"]
         yield {};
         throw error;
       },
-      { onError },
+      { onError }
     );
 
     const response = await fetchHandler(request, env, ctx);
@@ -185,13 +185,13 @@ data: ["Alice","Bob"]
         yield {};
         throw new Error();
       },
-      { onError: async () => ({ event: "error_occurred" }) },
+      { onError: async () => ({ event: "error_occurred" }) }
     );
 
     const response = await fetchHandler(
       new Request("http://test.sse.workers.dev"),
       env,
-      ctx,
+      ctx
     );
 
     const messages = await readResponseStream(response);

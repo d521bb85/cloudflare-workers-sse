@@ -113,21 +113,29 @@ export default {
 }
 ```
 
-### Request Preprocessing
+### Middleware
 
-Request preprocessing can be easily achieved by implementing a middleware handler.
-
-For example, to allow only `POST` requests, you can do the following:
+If your worker requires additional logic — such as request validation, response modification, or other pre/post-processing — you can implement a middleware.
 
 ```typescript
-import { sse } from "cloudflare-workers-sse";
+import { type FetchHandler, sse } from "cloudflare-workers-sse";
 
 export default {
-  fetch: (request: Request, env: Env, ctx: ExecutionContext) => {
-    if (request.method !== "POST") {
-      return new Response("Method Not Allowed", { status: 405 });
-    }
-
-    return sse(handler)(request, env, ctx);
-  }
+  fetch: middleware(sse(handler))
 }
+
+function middleware<Env>(
+  nextHandler: FetchHandler<Env>
+): FetchHandler<Env> {
+  return async function middlewareHandler(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ) {
+    // a before logic
+    const response = await nextHandler(request, env, ctx);
+    // an after logic
+    return response; 
+  };
+}
+```
