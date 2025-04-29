@@ -12,6 +12,7 @@ export interface SSEMessage {
   id?: string;
   event?: string;
   data?: null | boolean | number | bigint | string | Jsonifiable;
+  retry?: number;
 }
 
 export interface SSEOptions<Env> {
@@ -114,6 +115,7 @@ function serializeMessage(message: SSEMessage) {
     serialized += `event: ${message.event}\n`;
   }
 
+  // Data field is always present
   if (message.data === null || message.data === undefined) {
     serialized += "data:";
   } else {
@@ -126,6 +128,17 @@ function serializeMessage(message: SSEMessage) {
       .split("\n")
       .map((line) => `data: ${line}`)
       .join("\n");
+  }
+
+  if (message.retry !== undefined) {
+    // Only include retry if it's a positive integer
+    if (
+      typeof message.retry === "number" &&
+      Number.isInteger(message.retry) &&
+      message.retry > 0
+    ) {
+      serialized += `\nretry: ${message.retry}`;
+    }
   }
 
   serialized += "\n\n";
