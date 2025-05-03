@@ -79,11 +79,13 @@ interface SSEMessage {
   id?: string;
   event?: string;
   data?: null | boolean | number | bigint | string | Jsonifiable;
+  retry?: number;
 }
 ```
 
 `data` is optional and can be any primitive type (except `Symbol`) or an object, in which case it will be converted to JSON. More information about `Jsonifiable` can be found [here](https://github.com/sindresorhus/type-fest/blob/main/source/jsonifiable.d.ts). If data is omitted or set to `undefined` or `null`, the empty `data` field will be added. 
 
+`retry` is an optional field that specifies the reconnection time in milliseconds. Must be a non-negative integer.  Invalid values result in the field being ignored.
 
 ### Handling Errors
 
