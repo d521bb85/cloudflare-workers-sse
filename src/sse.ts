@@ -115,6 +115,14 @@ function serializeMessage(message: SSEMessage) {
     serialized += `event: ${message.event}\n`;
   }
 
+  if (message.retry !== undefined) {
+    if (!Number.isInteger(message.retry) || message.retry <= 0) {
+      throw new RangeError("The retry is expected to be a positive integer.");
+    }
+
+    serialized += `retry: ${message.retry}\n`;
+  }
+
   if (message.data === null || message.data === undefined) {
     serialized += "data:";
   } else {
@@ -127,14 +135,6 @@ function serializeMessage(message: SSEMessage) {
       .split("\n")
       .map((line) => `data: ${line}`)
       .join("\n");
-  }
-
-  if (
-    typeof message.retry === "number" &&
-    Number.isInteger(message.retry) &&
-    message.retry > 0
-  ) {
-    serialized += `\nretry: ${message.retry}`;
   }
 
   serialized += "\n\n";

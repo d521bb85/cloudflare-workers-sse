@@ -73,10 +73,14 @@ describe("sse", () => {
         event: "ignition"
       };
 
+      // with a retry only
+      yield { retry: 2000 };
+
       // with all fields
       yield {
         id: "f34853b5-c6bb-462a-8add-8ae84afecc36",
         event: "liftoff",
+        retry: 1000,
         data: { engines: "OK" }
       };
 
@@ -101,10 +105,6 @@ describe("sse", () => {
       };
 
       yield { data: ["Alice", "Bob"] };
-
-      // with retry field
-      yield { retry: 1000 };
-      yield { retry: 2000, data: "with retry" };
     });
 
     const response = await fetchHandler(
@@ -128,8 +128,12 @@ id: 98f6ade1-a75d-40f9-83b8-50f519c68e7b
 event: ignition
 data:
 
+retry: 2000
+data:
+
 id: f34853b5-c6bb-462a-8add-8ae84afecc36
 event: liftoff
+retry: 1000
 data: {"engines":"OK"}
 
 data:
@@ -154,137 +158,70 @@ data: {"from":"Alice","to":"Bob"}
 
 data: ["Alice","Bob"]
 
-data:
-retry: 1000
-
-data: with retry
-retry: 2000
-
 `;
 
     expect(messages.join("")).toBe(expectedOutput);
   });
 
-  describe("retry field validation", () => {
-    it("includes valid retry value", async () => {
+  describe("calls onError with a RangeError when an invalid retry value is passed", async () => {
+    it("retry value is non-integer", async () => {
+      const request = new Request("http://test.sse.workers.dev");
       const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield { retry: 1000 };
-      });
 
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
+      const onError = vi.fn();
+
+      const fetchHandler = sse(
+        async function* () {
+          yield { retry: 500.19 };
+        },
+        { onError }
       );
 
-      const messages = await readResponseStream(response);
+      const response = await fetchHandler(request, env, ctx);
+      await response.text();
       await waitOnExecutionContext(ctx);
 
-      expect(messages[0]).toBe("data:\nretry: 1000\n\n");
+      expect(onError).toBeCalledWith(expect.any(RangeError), request, env, ctx);
     });
 
-    it("ignores negative retry value", async () => {
+    it("retry value is zero", async () => {
+      const request = new Request("http://test.sse.workers.dev");
       const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield { retry: -1000 };
-      });
 
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
+      const onError = vi.fn();
+
+      const fetchHandler = sse(
+        async function* () {
+          yield { retry: 0 };
+        },
+        { onError }
       );
 
-      const messages = await readResponseStream(response);
+      const response = await fetchHandler(request, env, ctx);
+      await response.text();
       await waitOnExecutionContext(ctx);
 
-      expect(messages[0]).toBe("data:\n\n");
+      expect(onError).toBeCalledWith(expect.any(RangeError), request, env, ctx);
     });
 
-    it("ignores non-integer retry value", async () => {
+    it("retry value is negative", async () => {
+      const request = new Request("http://test.sse.workers.dev");
       const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield { retry: 1000.5 };
-      });
 
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
+      const onError = vi.fn();
+
+      const fetchHandler = sse(
+        async function* () {
+          yield { retry: -1000 };
+        },
+        { onError }
       );
 
-      const messages = await readResponseStream(response);
+      const response = await fetchHandler(request, env, ctx);
+      await response.text();
       await waitOnExecutionContext(ctx);
 
-      expect(messages[0]).toBe("data:\n\n");
-    });
-
-    it("ignores zero retry value", async () => {
-      const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield { retry: 0 };
-      });
-
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
-      );
-
-      const messages = await readResponseStream(response);
-      await waitOnExecutionContext(ctx);
-
-      expect(messages[0]).toBe("data:\n\n");
-    });
-
-    it("handles retry with other fields", async () => {
-      const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield {
-          retry: 1000,
-          id: "test-id",
-          event: "test-event",
-          data: "test data"
-        };
-      });
-
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
-      );
-
-      const messages = await readResponseStream(response);
-      await waitOnExecutionContext(ctx);
-
-      expect(messages[0]).toBe(
-        "id: test-id\nevent: test-event\ndata: test data\nretry: 1000\n\n"
-      );
-    });
-
-    it("handles multiple retry values in sequence", async () => {
-      const ctx = createExecutionContext();
-      const fetchHandler = sse(async function* () {
-        yield { retry: 1000 };
-        yield { retry: 2000 };
-        yield { retry: -1000 }; // Should be ignored
-        yield { retry: 3000 };
-      });
-
-      const response = await fetchHandler(
-        new Request("http://test.sse.workers.dev"),
-        env,
-        ctx
-      );
-
-      const messages = await readResponseStream(response);
-      await waitOnExecutionContext(ctx);
-
-      expect(messages[0]).toBe("data:\nretry: 1000\n\n");
-      expect(messages[1]).toBe("data:\nretry: 2000\n\n");
-      expect(messages[2]).toBe("data:\n\n");
-      expect(messages[3]).toBe("data:\nretry: 3000\n\n");
+      expect(onError).toBeCalledWith(expect.any(RangeError), request, env, ctx);
     });
   });
 
