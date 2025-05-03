@@ -115,7 +115,6 @@ function serializeMessage(message: SSEMessage) {
     serialized += `event: ${message.event}\n`;
   }
 
-  // Data field is always present
   if (message.data === null || message.data === undefined) {
     serialized += "data:";
   } else {
@@ -130,15 +129,12 @@ function serializeMessage(message: SSEMessage) {
       .join("\n");
   }
 
-  if (message.retry !== undefined) {
-    // Only include retry if it's a positive integer
-    if (
-      typeof message.retry === "number" &&
-      Number.isInteger(message.retry) &&
-      message.retry > 0
-    ) {
-      serialized += `\nretry: ${message.retry}`;
-    }
+  if (
+    typeof message.retry === "number" &&
+    Number.isInteger(message.retry) &&
+    message.retry > 0
+  ) {
+    serialized += `\nretry: ${message.retry}`;
   }
 
   serialized += "\n\n";
