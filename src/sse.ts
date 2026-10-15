@@ -16,8 +16,9 @@ export type SSEHandler<Env> = (
   env: Env,
   ctx: ExecutionContext,
   /**
-   * Aborts when the client disconnects or a heartbeat write fails.
-   * Pass this into upstream `fetch` / SDK calls so generation stops promptly.
+   * Aborts when the client disconnects, a stream write fails, or a
+   * heartbeat write fails. Pass this into upstream `fetch` / SDK calls
+   * so generation stops promptly.
    */
   signal: AbortSignal
 ) =>
@@ -119,8 +120,9 @@ type RaceWinner =
  * The handler may instead return a `Response` (for example, for auth failures),
  * which is sent as-is without SSE wrapping.
  *
- * The fourth argument is an `AbortSignal` that aborts on client disconnect or a
- * failed heartbeat write — pass it to upstream fetches so they cancel promptly.
+ * The fourth argument is an `AbortSignal` that aborts on client disconnect, a
+ * failed stream write, or a failed heartbeat write — pass it to upstream
+ * fetches so they cancel promptly.
  */
 export function sse<Env>(
   sseHandler: SSEHandler<Env>,
