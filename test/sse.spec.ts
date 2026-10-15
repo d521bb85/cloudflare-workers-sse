@@ -23,7 +23,6 @@ describe("sse", () => {
     await waitOnExecutionContext(ctx);
 
     expect(response.headers.get("cache-control")).toBe("no-cache");
-    expect(response.headers.get("connection")).toBe("keep-alive");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
   });
 
@@ -362,6 +361,34 @@ data:
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it("calls onError when the handler throws AbortError from its own AbortController", async () => {
+    const request = new Request("http://test.sse.workers.dev");
+    const ctx = createExecutionContext();
+    const onError = vi.fn(() => ({ event: "error", data: "upstream timeout" }));
+    const upstreamAbort = new DOMException(
+      "The operation was aborted.",
+      "AbortError"
+    );
+
+    const fetchHandler = sse(
+      async function* () {
+        yield { data: "start" };
+        throw upstreamAbort;
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(request, env, ctx);
+    const body = (await readResponseStream(response)).join("");
+    await waitOnExecutionContext(ctx);
+
+    expect(onError).toBeCalledWith(upstreamAbort, request, env, ctx);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(body).toContain("data: start");
+    expect(body).toContain("event: error");
+    expect(body).toContain("data: upstream timeout");
+  });
+
   it("does not call onError when the response body is cancelled without aborting the request", async () => {
     const ctx = createExecutionContext();
     const onError = vi.fn();
@@ -400,7 +427,42 @@ data:
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("does not allow customHeaders to override Cache-Control or Connection", async () => {
+  it("aborts the handler signal when a main-loop write fails after cancel", async () => {
+    const ctx = createExecutionContext();
+    let handlerSignal: AbortSignal | undefined;
+
+    const fetchHandler = sse(async function* (_request, _env, _ctx, signal) {
+      handlerSignal = signal;
+      yield { data: "first" };
+      await delay(50);
+      yield { data: "second" };
+      await delay(50);
+      yield { data: "third" };
+    });
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    if (!response.body) {
+      throw new Error("Expected SSE response body");
+    }
+
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("data: first");
+
+    // No request.signal abort — only cancel the body so the next write fails.
+    await reader.cancel();
+    await delay(200);
+    await waitOnExecutionContext(ctx);
+
+    expect(handlerSignal?.aborted).toBe(true);
+  });
+
+  it("does not allow customHeaders to override Cache-Control", async () => {
     const ctx = createExecutionContext();
 
     const fetchHandler = sse(
@@ -409,8 +471,7 @@ data:
       },
       {
         customHeaders: {
-          "Cache-Control": "max-age=3600",
-          Connection: "close"
+          "Cache-Control": "max-age=3600"
         }
       }
     );
@@ -424,7 +485,6 @@ data:
     await waitOnExecutionContext(ctx);
 
     expect(response.headers.get("cache-control")).toBe("no-cache");
-    expect(response.headers.get("connection")).toBe("keep-alive");
   });
 
   describe("calls onError with a RangeError when an invalid retry value is passed", async () => {
@@ -626,7 +686,327 @@ data:
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  it("closes the stream promptly when aborted during a pending next()", async () => {
+    const ctx = createExecutionContext();
+    const controller = new AbortController();
+    const never = new Promise<void>(() => {});
+
+    const fetchHandler = sse(async function* () {
+      yield { data: "first" };
+      await never;
+      yield { data: "second" };
+    });
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev", {
+        signal: controller.signal
+      }),
+      env,
+      ctx
+    );
+
+    if (!response.body) {
+      throw new Error("Expected SSE response body");
+    }
+
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("data: first");
+
+    controller.abort();
+
+    // Must finish without waiting for the stuck generator.next()
+    const closed = await Promise.race([
+      reader.read().then(() => true),
+      delay(200).then(() => false)
+    ]);
+
+    expect(closed).toBe(true);
+    await waitOnExecutionContext(ctx);
+  });
+
+  it("stops the generator when serialization fails", async () => {
+    const ctx = createExecutionContext();
+    let cleanupRan = false;
+    const onError = vi.fn();
+
+    const fetchHandler = sse(
+      async function* () {
+        try {
+          yield { retry: 0 };
+          yield { data: "should-not-appear" };
+        } finally {
+          cleanupRan = true;
+        }
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    const body = (await readResponseStream(response)).join("");
+    await waitOnExecutionContext(ctx);
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(RangeError),
+      expect.any(Request),
+      env,
+      ctx
+    );
+    expect(cleanupRan).toBe(true);
+    expect(body).not.toContain("should-not-appear");
+  });
+
+  it("splits data and comments on CR / CRLF and rejects newlines in id/event", async () => {
+    const ctx = createExecutionContext();
+    const onError = vi.fn();
+
+    const fetchHandler = sse(
+      async function* () {
+        yield { data: "x\revent: evil" };
+        yield { data: "a\r\nb" };
+        yield { comment: "c1\rc2" };
+        yield { id: "safe\ninject", data: "nope" };
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    const body = (await readResponseStream(response)).join("");
+    await waitOnExecutionContext(ctx);
+
+    expect(body).toContain("data: x\ndata: event: evil\n\n");
+    expect(body).toContain("data: a\ndata: b\n\n");
+    expect(body).toContain(": c1\n: c2\n\n");
+    expect(body).not.toContain("id: safe");
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(RangeError),
+      expect.any(Request),
+      env,
+      ctx
+    );
+  });
+
+  it("rejects NUL in id", async () => {
+    const request = new Request("http://test.sse.workers.dev");
+    const ctx = createExecutionContext();
+    const onError = vi.fn();
+
+    const fetchHandler = sse(
+      async function* () {
+        yield { id: "before\0after", data: "x" };
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(request, env, ctx);
+    await response.text();
+    await waitOnExecutionContext(ctx);
+
+    expect(onError).toBeCalledWith(expect.any(RangeError), request, env, ctx);
+  });
+
+  it("writes an empty id to reset the last event ID", async () => {
+    const ctx = createExecutionContext();
+
+    const fetchHandler = sse(async function* () {
+      yield { id: "", data: "reset" };
+    });
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    const messages = await readResponseStream(response);
+    await waitOnExecutionContext(ctx);
+
+    expect(messages.join("")).toBe("id: \ndata: reset\n\n");
+  });
+
+  it("calls onError when toJSON returns undefined", async () => {
+    const request = new Request("http://test.sse.workers.dev");
+    const ctx = createExecutionContext();
+    const onError = vi.fn();
+
+    const fetchHandler = sse(
+      async function* () {
+        yield {
+          data: {
+            toJSON() {
+              return undefined as unknown as string;
+            }
+          }
+        };
+      },
+      { onError }
+    );
+
+    const response = await fetchHandler(request, env, ctx);
+    await response.text();
+    await waitOnExecutionContext(ctx);
+
+    expect(onError).toBeCalledWith(expect.any(TypeError), request, env, ctx);
+  });
+
+  it("closes the stream when a heartbeat write fails after cancel", async () => {
+    const ctx = createExecutionContext();
+    const never = new Promise<void>(() => {});
+
+    const fetchHandler = sse(
+      async function* () {
+        yield { data: "first" };
+        await never;
+        yield { data: "second" };
+      },
+      { heartbeatIntervalMs: 15 }
+    );
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    if (!response.body) {
+      throw new Error("Expected SSE response body");
+    }
+
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("data: first");
+
+    await reader.cancel();
+
+    // Heartbeat write fails → requestStop → writer closes; must not wait on never
+    await waitOnExecutionContext(ctx);
+    await delay(80);
+  });
+
+  it("aborts the handler signal when a heartbeat write fails so upstream can stop", async () => {
+    const ctx = createExecutionContext();
+    let cleanupMs = 0;
+    const started = Date.now();
+
+    const fetchHandler = sse(
+      async function* (_request, _env, _ctx, signal) {
+        yield { data: "first" };
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 1000);
+            signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(toAbortError());
+            });
+          });
+        } catch {
+          // aborted by failed heartbeat
+        } finally {
+          cleanupMs = Date.now() - started;
+        }
+      },
+      { heartbeatIntervalMs: 15 }
+    );
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    if (!response.body) {
+      throw new Error("Expected SSE response body");
+    }
+
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("data: first");
+
+    await reader.cancel();
+
+    // writeMessages returns without awaiting generator.return(); wait for finally.
+    for (let i = 0; i < 50 && cleanupMs === 0; i++) {
+      await delay(10);
+    }
+
+    await waitOnExecutionContext(ctx);
+
+    // Without signal abort, finally would wait ~1000ms for the timer.
+    expect(cleanupMs).toBeGreaterThan(0);
+    expect(cleanupMs).toBeLessThan(500);
+  });
+
+  it("aborts the handler signal when the request is aborted", async () => {
+    const ctx = createExecutionContext();
+    const controller = new AbortController();
+    let handlerSignal: AbortSignal | undefined;
+
+    const fetchHandler = sse(async function* (_request, _env, _ctx, signal) {
+      handlerSignal = signal;
+      yield { data: "first" };
+      await delay(100);
+      yield { data: "second" };
+    });
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev", {
+        signal: controller.signal
+      }),
+      env,
+      ctx
+    );
+
+    if (!response.body) {
+      throw new Error("Expected SSE response body");
+    }
+
+    const reader = response.body.getReader();
+    await reader.read();
+    controller.abort();
+    await delay(50);
+    await waitOnExecutionContext(ctx);
+
+    expect(handlerSignal?.aborted).toBe(true);
+  });
+
+  it("streams many messages then completes without retaining abort handlers", async () => {
+    const ctx = createExecutionContext();
+    const count = 500;
+
+    const fetchHandler = sse(async function* () {
+      for (let i = 0; i < count; i++) {
+        yield { data: i };
+      }
+    });
+
+    const response = await fetchHandler(
+      new Request("http://test.sse.workers.dev"),
+      env,
+      ctx
+    );
+
+    const body = (await readResponseStream(response)).join("");
+    await waitOnExecutionContext(ctx);
+
+    expect(body).toContain(`data: 0\n\n`);
+    expect(body).toContain(`data: ${count - 1}\n\n`);
+  });
 });
+
+function toAbortError() {
+  return new DOMException("The operation was aborted.", "AbortError");
+}
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));

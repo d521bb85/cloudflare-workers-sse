@@ -14,7 +14,12 @@ export type Jsonifiable =
 export type SSEHandler<Env> = (
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  /**
+   * Aborts when the client disconnects or a heartbeat write fails.
+   * Pass this into upstream `fetch` / SDK calls so generation stops promptly.
+   */
+  signal: AbortSignal
 ) =>
   | SSEMessageAsyncGenerator
   | Response
@@ -22,14 +27,39 @@ export type SSEHandler<Env> = (
 
 export type SSEMessageAsyncGenerator = AsyncGenerator<SSEMessage, void, void>;
 
+/**
+ * A message to yield from an SSE handler. All fields are optional.
+ * Invalid fields throw during serialization; the error goes to `onError`.
+ */
 export interface SSEMessage {
+  /**
+   * Written as `id: <value>`. Must not contain CR, LF, or NUL (throws
+   * `RangeError`). An empty string is written and resets the client's
+   * last event ID.
+   */
   id?: string;
+  /**
+   * Written as `event: <value>`. Must not contain CR or LF (throws
+   * `RangeError`).
+   */
   event?: string;
+  /**
+   * Objects and arrays are JSON-stringified; other values use `toString()`.
+   * Each line (CR, LF, or CRLF) becomes its own `data:` line. Omitted,
+   * `null`, or `undefined` writes an empty `data:` line, so the client still
+   * receives an event (unless the message is comment-only).
+   * A `bigint` is only supported at the top level, not inside objects.
+   */
   data?: null | boolean | number | bigint | string | Jsonifiable;
+  /**
+   * Client reconnection delay in milliseconds, written as `retry: <value>`.
+   * Must be a positive integer (throws `RangeError`).
+   */
   retry?: number;
   /**
-   * Optional SSE comment. Serialized as line(s) starting with `:`.
-   * When used alone, produces a comment-only message (useful for keepalives).
+   * SSE comment, written as one `: <line>` per line.
+   * A message with only `comment` (no `data` key, and no `id`, `event`,
+   * or `retry`) is comment-only and dispatches no event on the client.
    */
   comment?: string;
 }
@@ -39,16 +69,17 @@ export interface SSEOptions<Env> {
    * Custom headers to include in the SSE response.
    *
    * Allows adding extra headers (e.g., CORS, security policies) as needed.
-   * Essential SSE headers (`Content-Type`, `Cache-Control`, `Connection`)
+   * Essential SSE headers (`Content-Type`, `Cache-Control`)
    * always take precedence and cannot be overridden.
    */
   customHeaders?: { [K in string]: string };
   /**
    * Optional error handler.
    *
-   * Invoked when an error occurs during streaming.
-   * Can return an SSE message to send to the client.
-   * Not called on client disconnect / abort.
+   * Invoked when the generator throws or a message fails to serialize.
+   * Can return an SSE message to send to the client before the stream closes.
+   * Not called on client disconnect / abort, or when the handler throws
+   * before returning a generator (that error propagates out of `fetch`).
    */
   onError?: OnErrorFunction<Env>;
   /**
@@ -75,6 +106,10 @@ type BoundOnErrorFunction = (
   error: unknown
 ) => ReturnType<OnErrorFunction<unknown>>;
 
+type RaceWinner =
+  | { type: "next"; result: IteratorResult<SSEMessage, void> }
+  | { type: "abort" };
+
 /**
  * Creates a fetch handler that returns a streaming response using Server-Sent Events.
  *
@@ -83,6 +118,9 @@ type BoundOnErrorFunction = (
  *
  * The handler may instead return a `Response` (for example, for auth failures),
  * which is sent as-is without SSE wrapping.
+ *
+ * The fourth argument is an `AbortSignal` that aborts on client disconnect or a
+ * failed heartbeat write — pass it to upstream fetches so they cancel promptly.
  */
 export function sse<Env>(
   sseHandler: SSEHandler<Env>,
@@ -96,30 +134,55 @@ export function sse<Env>(
     const onError = (error: unknown) =>
       options?.onError?.(error, request, env, ctx);
 
-    const result = await sseHandler(request, env, ctx);
+    // Combined signal: client abort (request.signal) or library teardown
+    // (failed heartbeat / stream stop). Handler should pass this upstream.
+    const streamAbort = new AbortController();
 
-    if (result instanceof Response) {
-      return result;
+    const forwardRequestAbort = () => {
+      if (!streamAbort.signal.aborted) {
+        streamAbort.abort();
+      }
+    };
+
+    if (request.signal.aborted) {
+      streamAbort.abort();
+    } else {
+      request.signal.addEventListener("abort", forwardRequestAbort);
     }
 
-    const headers = new Headers(options?.customHeaders);
-    headers.set("Content-Type", "text/event-stream");
-    headers.set("Cache-Control", "no-cache");
-    headers.set("Connection", "keep-alive");
+    try {
+      const result = await sseHandler(request, env, ctx, streamAbort.signal);
 
-    const stream = createSSEStream();
+      if (result instanceof Response) {
+        request.signal.removeEventListener("abort", forwardRequestAbort);
+        return result;
+      }
 
-    void writeMessages(
-      stream,
-      result,
-      onError,
-      request.signal,
-      options?.heartbeatIntervalMs
-    ).catch(() => {
-      // writeMessages handles cleanup; this prevents unhandled rejections
-    });
+      const headers = new Headers(options?.customHeaders);
+      headers.set("Content-Type", "text/event-stream");
+      headers.set("Cache-Control", "no-cache");
 
-    return new Response(stream.readable, { headers });
+      const stream = createSSEStream();
+
+      void writeMessages(
+        stream,
+        result,
+        onError,
+        streamAbort,
+        options?.heartbeatIntervalMs
+      )
+        .catch(() => {
+          // writeMessages handles cleanup; this prevents unhandled rejections
+        })
+        .finally(() => {
+          request.signal.removeEventListener("abort", forwardRequestAbort);
+        });
+
+      return new Response(stream.readable, { headers });
+    } catch (error) {
+      request.signal.removeEventListener("abort", forwardRequestAbort);
+      throw error;
+    }
   };
 }
 
@@ -131,20 +194,40 @@ function createSSEStream(): SSEStream {
 
 const textEncoder = new TextEncoder();
 
+/** SSE / HTML treats CR, LF, and CRLF as line endings. */
+const SSE_LINE_ENDINGS = /\r\n|\r|\n/;
+
+function assertValidSSEField(
+  name: "id" | "event",
+  value: string
+): asserts value is string {
+  if (name === "id" && value.includes("\0")) {
+    throw new RangeError("The id field must not contain NUL (\\0).");
+  }
+
+  if (/[\r\n]/.test(value)) {
+    throw new RangeError(
+      `The ${name} field must not contain CR or LF characters.`
+    );
+  }
+}
+
 function serializeMessage(message: SSEMessage) {
   let serialized = "";
 
   if (message.comment !== undefined) {
-    for (const line of message.comment.split("\n")) {
+    for (const line of message.comment.split(SSE_LINE_ENDINGS)) {
       serialized += `${line === "" ? ":" : `: ${line}`}\n`;
     }
   }
 
-  if (message.id) {
+  if (message.id !== undefined) {
+    assertValidSSEField("id", message.id);
     serialized += `id: ${message.id}\n`;
   }
 
-  if (message.event) {
+  if (message.event !== undefined) {
+    assertValidSSEField("event", message.event);
     serialized += `event: ${message.event}\n`;
   }
 
@@ -158,8 +241,8 @@ function serializeMessage(message: SSEMessage) {
 
   const isCommentOnly =
     message.comment !== undefined &&
-    !message.id &&
-    !message.event &&
+    message.id === undefined &&
+    message.event === undefined &&
     message.retry === undefined &&
     !("data" in message);
 
@@ -172,8 +255,14 @@ function serializeMessage(message: SSEMessage) {
           ? JSON.stringify(message.data)
           : message.data.toString();
 
+      if (typeof stringifiedData !== "string") {
+        throw new TypeError(
+          "message.data JSON serialization produced a non-string value."
+        );
+      }
+
       serialized += stringifiedData
-        .split("\n")
+        .split(SSE_LINE_ENDINGS)
         .map((line) => `data: ${line}`)
         .join("\n");
     }
@@ -188,36 +277,44 @@ function serializeMessage(message: SSEMessage) {
 }
 
 /**
- * Disconnect is identified by hard signals only — never by error message text.
- * Stream write failures are normalized to AbortError in writeSerialized.
+ * Private marker for consumer-side write failures.
+ * Do not treat arbitrary AbortError (e.g. upstream timeout) as disconnect —
+ * those must reach onError so the client is not left with a silent cutoff.
+ */
+class StreamWriteError extends Error {
+  constructor() {
+    super("SSE stream write failed.");
+    this.name = "StreamWriteError";
+  }
+}
+
+/**
+ * Disconnect is identified by hard signals only — never by error name/message.
+ * Write failures throw StreamWriteError; client/heartbeat abort sets signal.aborted.
  */
 function isDisconnectError(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) {
     return true;
   }
 
-  return error instanceof Error && error.name === "AbortError";
-}
-
-function toAbortError() {
-  return new DOMException("The operation was aborted.", "AbortError");
+  return error instanceof StreamWriteError;
 }
 
 async function writeMessages(
   stream: SSEStream,
   generator: SSEMessageAsyncGenerator,
   onError: BoundOnErrorFunction,
-  signal: AbortSignal,
+  streamAbort: AbortController,
   heartbeatIntervalMs?: number
 ) {
+  const signal = streamAbort.signal;
   const writer = stream.writable.getWriter();
   let heartbeatId: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let stopped = false;
   let writeQueue: Promise<void> = Promise.resolve();
-  let resolveAbort: (() => void) | undefined;
-  const abortBarrier = new Promise<void>((resolve) => {
-    resolveAbort = resolve;
-  });
+  // Overwritten each iteration — never retains handlers on a long-lived promise.
+  let wakeOnAbort: (() => void) | undefined;
 
   const closeWriter = async () => {
     if (closed) {
@@ -248,6 +345,28 @@ async function writeMessages(
     }
   };
 
+  /**
+   * Begin teardown without awaiting generator.return().
+   * On an async generator, return() waits behind a pending next() — awaiting
+   * it here would hang the stream until that next() settles (e.g. upstream fetch).
+   * Aborting streamAbort lets handler code cancel that fetch via `signal`.
+   */
+  const requestStop = () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    clearHeartbeat();
+    wakeOnAbort?.();
+    wakeOnAbort = undefined;
+    void stopGenerator();
+
+    if (!signal.aborted) {
+      streamAbort.abort();
+    }
+  };
+
   const writeSerialized = (message: SSEMessage) => {
     // Serialization errors reject synchronously so callers can invoke onError.
     const bytes = serializeMessage(message);
@@ -261,8 +380,8 @@ async function writeMessages(
         await writer.write(bytes);
       } catch {
         // Any write failure means the consumer side is gone (cancel, closed
-        // writable, network drop). Classify by source, not message text.
-        throw toAbortError();
+        // writable, network drop). Private class — not a generic AbortError.
+        throw new StreamWriteError();
       }
     });
 
@@ -280,18 +399,13 @@ async function writeMessages(
   ) {
     heartbeatId = setInterval(() => {
       void writeSerialized({ comment: "" }).catch(() => {
-        clearHeartbeat();
+        // Same path as client abort: wake the loop, start return(), abort signal.
+        requestStop();
       });
     }, heartbeatIntervalMs);
   }
 
-  const onAbort = () => {
-    clearHeartbeat();
-    resolveAbort?.();
-    void stopGenerator();
-  };
-
-  signal.addEventListener("abort", onAbort);
+  signal.addEventListener("abort", requestStop);
 
   try {
     if (signal.aborted) {
@@ -299,23 +413,32 @@ async function writeMessages(
       return;
     }
 
-    // Manual iteration (not for-await) so abort can win a race against a
-    // pending generator.next() — return() alone only queues behind it.
+    // Manual iteration (not for-await) so abort can win against a pending
+    // generator.next() without Promise.race retaining handlers on abortRace.
     while (true) {
       const nextPromise = generator.next();
 
-      const winner = await Promise.race([
-        nextPromise.then((result) => ({ type: "next" as const, result })),
-        abortBarrier.then(() => ({ type: "abort" as const }))
-      ]);
+      const winner = await new Promise<RaceWinner>((resolve, reject) => {
+        wakeOnAbort = () => resolve({ type: "abort" });
+
+        nextPromise.then((result) => resolve({ type: "next", result }), reject);
+
+        // Abort may have landed between next() and assigning wakeOnAbort.
+        if (signal.aborted) {
+          resolve({ type: "abort" });
+        }
+      });
+
+      wakeOnAbort = undefined;
 
       if (winner.type === "abort") {
-        // next() may still settle later; prevent unhandled rejections
+        // next() may still settle later; prevent unhandled rejections.
+        // Do not await stopGenerator(): return() waits behind pending next(),
+        // and requestStop already started a non-awaited return().
         void nextPromise.then(
           () => {},
           () => {}
         );
-        await stopGenerator();
         return;
       }
 
@@ -324,6 +447,7 @@ async function writeMessages(
       }
 
       if (signal.aborted) {
+        // next() already settled; safe to await cleanup
         await stopGenerator();
         break;
       }
@@ -332,6 +456,9 @@ async function writeMessages(
     }
   } catch (error) {
     if (isDisconnectError(error, signal)) {
+      // Write-side disconnect (no enable_request_signal / no heartbeat):
+      // abort handler signal so parallel upstream work can cancel, then clean up.
+      requestStop();
       await stopGenerator();
       return;
     }
@@ -349,8 +476,12 @@ async function writeMessages(
     } catch {
       // onError itself threw — close without further callbacks
     }
+
+    // Generator is paused at yield (or already errored); resume finally blocks
+    // so upstream fetches / readers are released.
+    await stopGenerator();
   } finally {
-    signal.removeEventListener("abort", onAbort);
+    signal.removeEventListener("abort", requestStop);
     clearHeartbeat();
     await writeQueue.catch(() => {});
     await closeWriter();

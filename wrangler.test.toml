@@ -1,1 +1,3 @@
 compatibility_date = "2026-10-01"
+# Abort request.signal when the client disconnects (needed for prompt stream teardown).
+compatibility_flags = ["enable_request_signal"]
