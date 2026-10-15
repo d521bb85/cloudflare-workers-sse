@@ -1,43 +1,23 @@
 # cloudflare-workers-sse
 
-Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.
+SSE streaming for Cloudflare Workers via async generators.
 
-- Provides a simple, straightforward, and functional approach to streaming SSE messages using async generators.
-- Easily integrates with existing Workers.
-- Works seamlessly with [OpenAI streaming](https://github.com/openai/openai-node?tab=readme-ov-file#streaming-responses).
-- Adheres to the [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html) and is thoroughly tested.
+Yield messages from a handler — they are streamed to the client as Server-Sent Events. Fits any token stream: Workers AI, AI Gateway, OpenAI-compatible APIs, Anthropic, or your own backend.
+
+- Drop-in `fetch` handler
+- Early `Response` for auth / validation (no SSE opened)
+- Heartbeats, custom headers, and error callbacks
+- Follows the [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html)
 
 ## Installation
-
-With npm
 
 ```bash
 npm install cloudflare-workers-sse
 ```
 
-With Yarn
+Also works with yarn, pnpm, and bun.
 
-```bash
-yarn add cloudflare-workers-sse
-```
-
-With pnpm
-
-```bash
-pnpm add cloudflare-workers-sse
-```
-
-With Bun
-
-```bash
-bun add cloudflare-workers-sse
-```
-
-## Usage
-
-The implementation of SSE involves two components: a client that receives messages and a server (in this case, a worker) that publishes them.
-
-Let's start with the worker.
+## Quick start
 
 ```typescript
 import { sse } from "cloudflare-workers-sse";
@@ -54,9 +34,9 @@ async function* handler(request: Request, env: Env, ctx: ExecutionContext) {
 }
 ```
 
-And that's basically it. All messages yielded are streamed to a client listening for them. Once there are no more messages, the stream is closed.
+Each yielded message is streamed to the client. When the generator finishes, the stream closes.
 
-The handler may also return a plain `Response` (synchronously or asynchronously) instead of a generator — for example, to reject unauthorized requests without opening an SSE stream:
+To reject a request without opening SSE, return a plain `Response`:
 
 ```typescript
 async function handler(request: Request, env: Env, ctx: ExecutionContext) {
@@ -70,20 +50,96 @@ async function handler(request: Request, env: Env, ctx: ExecutionContext) {
 }
 ```
 
-Although the simplest client-side implementation can be achieved using `EventSource`, for more advanced scenarios — such as using `POST` requests or handling authentication — it is recommended to use libraries such as [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source).
+## Stream an LLM
+
+Wire any streaming API into the same `yield` loop. Example: Workers AI through [AI Gateway](https://developers.cloudflare.com/ai-gateway/) — auth first, then forward tokens as your own SSE events:
 
 ```typescript
-const eventSource = new EventSource(
-  "https://<YOUR_WORKER_SUBDOMAIN>.workers.dev"
-);
-eventSource.addEventListener("greeting", (event) => {
-  // handle the greeting message
+import { sse } from "cloudflare-workers-sse";
+
+export default {
+  fetch: sse(handler, {
+    heartbeatIntervalMs: 15_000,
+    onError: () => ({ event: "error", data: { message: "generation failed" } }),
+  }),
+};
+
+async function handler(request: Request, env: Env) {
+  if (request.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  const { prompt } = await request.json<{ prompt: string }>();
+
+  return (async function* () {
+    const stream = await env.AI.run(
+      "@cf/meta/llama-3.1-8b-instruct",
+      {
+        messages: [{ role: "user", content: prompt }],
+        stream: true,
+      },
+      { gateway: { id: "my-gateway" } }
+    );
+
+    for await (const chunk of stream) {
+      yield { event: "token", data: chunk };
+    }
+
+    yield { event: "done" };
+  })();
+}
+```
+
+Workers AI with `stream: true` can already return SSE. Use this library when you want your own protocol — custom events, auth gates, heartbeats, or shaped error messages.
+
+The same pattern works with any OpenAI-compatible client pointed at AI Gateway (or another provider):
+
+```typescript
+import OpenAI from "openai";
+
+async function* streamCompletion(env: Env) {
+  const openai = new OpenAI({
+    apiKey: env.AI_GATEWAY_TOKEN,
+    baseURL: `https://gateway.ai.cloudflare.com/v1/${env.ACCOUNT_ID}/${env.GATEWAY_ID}/compat`,
+  });
+
+  const stream = await openai.chat.completions.create({
+    model: "workers-ai/@cf/meta/llama-3.1-8b-instruct",
+    messages: [{ role: "user", content: "Hello" }],
+    stream: true,
+  });
+
+  for await (const part of stream) {
+    const text = part.choices[0]?.delta?.content;
+    if (text) {
+      yield { data: text };
+    }
+  }
+}
+```
+
+### Client
+
+Browser `EventSource` only supports GET. For the POST example above (or auth headers), use something like [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source):
+
+```typescript
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+
+await fetchEventSource("https://<YOUR_WORKER>.workers.dev", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: "Hello" }),
+  onmessage(event) {
+    if (event.event === "token") {
+      // handle each token
+    }
+  },
 });
 ```
 
-### Message Type
+## Message shape
 
-All messages yielded by a handler should conform to the `SSEMessage` interface.
+Yielded values should match `SSEMessage`:
 
 ```typescript
 interface SSEMessage {
@@ -95,19 +151,17 @@ interface SSEMessage {
 }
 ```
 
-`data` can be of any primitive type (except `Symbol`) or an object, in which case it will be converted to JSON. `Jsonifiable` covers JSON-serializable objects, arrays, primitives, and values with a `toJSON()` method. If data is omitted or set to `undefined` or `null`, the empty `data` field will be added — except for comment-only messages.
+- **`data`** — primitives or objects (objects are JSON-stringified). Omitted / `null` / `undefined` become an empty `data` field (except comment-only messages).
+- **`retry`** — reconnection time in ms; must be a positive integer.
+- **`comment`** — serialized as `: ...` lines. A comment-only message (no `id` / `event` / `retry` / `data`) is useful for keepalives.
 
-`retry` sets the reconnection time in milliseconds. If specified, must be a positive integer, otherwise a `RangeError` is thrown.
+## Options
 
-`comment` is serialized as SSE comment line(s) starting with `:`. Multiline comments become multiple comment lines. A comment-only message (no `id`, `event`, `retry`, or `data`) does not include a `data` field, which is useful for keepalives.
+### Errors
 
-### Handling Errors
-
-Errors thrown by a handler or during serialization can be caught via the `onError` callback. It may also return a message to stream to the client before the connection closes. Client disconnects and request aborts do not invoke `onError`.
+`onError` runs when the handler or serialization throws. It may return a message to send before the stream closes. Client disconnects do not invoke it.
 
 ```typescript
-import { sse } from "cloudflare-workers-sse";
-
 export default {
   fetch: sse(handler, {
     onError: (error, request, env, ctx) => ({ event: "error_occurred" }),
@@ -117,11 +171,9 @@ export default {
 
 ### Heartbeats
 
-To keep the connection alive during long idle periods, set `heartbeatIntervalMs` to a positive number of milliseconds. While the stream is open, a comment-only keepalive (`:\n\n`) is written on that interval.
+Set `heartbeatIntervalMs` to write a comment keepalive (`:\n\n`) on that interval while the stream is open.
 
 ```typescript
-import { sse } from "cloudflare-workers-sse";
-
 export default {
   fetch: sse(handler, {
     heartbeatIntervalMs: 15_000,
@@ -129,13 +181,11 @@ export default {
 };
 ```
 
-### Custom Headers
+### Custom headers
 
-By default, only essential headers such as `Content-Type`, `Cache-Control`, and `Connection` are included in the response. To send additional headers, use the `customHeaders` option. Essential SSE headers always take precedence and cannot be overridden.
+Essential SSE headers (`Content-Type`, `Cache-Control`, `Connection`) always win. Add others via `customHeaders`:
 
 ```typescript
-import { sse } from "cloudflare-workers-sse";
-
 export default {
   fetch: sse(handler, {
     customHeaders: { "access-control-allow-origin": "https://example.com" },
@@ -145,7 +195,7 @@ export default {
 
 ### Middleware
 
-If your worker requires additional logic — such as request validation, response modification, or other pre/post-processing — you can implement a middleware.
+Wrap the SSE handler for validation or response tweaks:
 
 ```typescript
 import { type FetchHandler, sse } from "cloudflare-workers-sse";
@@ -154,15 +204,9 @@ export default {
   fetch: middleware(sse(handler)),
 };
 
-function middleware<Env>(nextHandler: FetchHandler<Env>): FetchHandler<Env> {
-  return async function middlewareHandler(
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext
-  ) {
-    // a before logic
-    const response = await nextHandler(request, env, ctx);
-    // an after logic
+function middleware<Env>(next: FetchHandler<Env>): FetchHandler<Env> {
+  return async (request, env, ctx) => {
+    const response = await next(request, env, ctx);
     return response;
   };
 }

@@ -1,7 +1,7 @@
 {
   "name": "cloudflare-workers-sse",
-  "version": "2.1.0",
-  "description": "Elegant Server-Sent Events (SSE) Streaming for Cloudflare Workers.",
+  "version": "2.2.0",
+  "description": "SSE streaming for Cloudflare Workers via async generators.",
   "keywords": [
     "cloudflare",
     "workers",
