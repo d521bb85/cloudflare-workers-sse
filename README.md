@@ -56,6 +56,20 @@ async function* handler(request: Request, env: Env, ctx: ExecutionContext) {
 
 And that's basically it. All messages yielded are streamed to a client listening for them. Once there are no more messages, the stream is closed.
 
+The handler may also return a plain `Response` (synchronously or asynchronously) instead of a generator — for example, to reject unauthorized requests without opening an SSE stream:
+
+```typescript
+async function handler(request: Request, env: Env, ctx: ExecutionContext) {
+  if (!isAuthorized(request)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  return (async function* () {
+    yield { event: "greeting", data: { text: "Hi there!" } };
+  })();
+}
+```
+
 Although the simplest client-side implementation can be achieved using `EventSource`, for more advanced scenarios — such as using `POST` requests or handling authentication — it is recommended to use libraries such as [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source).
 
 ```typescript
@@ -77,16 +91,19 @@ interface SSEMessage {
   event?: string;
   data?: null | boolean | number | bigint | string | Jsonifiable;
   retry?: number;
+  comment?: string;
 }
 ```
 
-`data` can be of any primitive type (except `Symbol`) or an object, in which case it will be converted to JSON. More information about `Jsonifiable` can be found [here](https://github.com/sindresorhus/type-fest/blob/main/source/jsonifiable.d.ts). If data is omitted or set to `undefined` or `null`, the empty `data` field will be added.
+`data` can be of any primitive type (except `Symbol`) or an object, in which case it will be converted to JSON. `Jsonifiable` covers JSON-serializable objects, arrays, primitives, and values with a `toJSON()` method. If data is omitted or set to `undefined` or `null`, the empty `data` field will be added — except for comment-only messages.
 
 `retry` sets the reconnection time in milliseconds. If specified, must be a positive integer, otherwise a `RangeError` is thrown.
 
+`comment` is serialized as SSE comment line(s) starting with `:`. Multiline comments become multiple comment lines. A comment-only message (no `id`, `event`, `retry`, or `data`) does not include a `data` field, which is useful for keepalives.
+
 ### Handling Errors
 
-Errors thrown by a handler or during serialization can be caught via the `onError` callback. It may also return a message to stream to the client before the connection closes.
+Errors thrown by a handler or during serialization can be caught via the `onError` callback. It may also return a message to stream to the client before the connection closes. Client disconnects and request aborts do not invoke `onError`.
 
 ```typescript
 import { sse } from "cloudflare-workers-sse";
@@ -98,9 +115,23 @@ export default {
 };
 ```
 
+### Heartbeats
+
+To keep the connection alive during long idle periods, set `heartbeatIntervalMs` to a positive number of milliseconds. While the stream is open, a comment-only keepalive (`:\n\n`) is written on that interval.
+
+```typescript
+import { sse } from "cloudflare-workers-sse";
+
+export default {
+  fetch: sse(handler, {
+    heartbeatIntervalMs: 15_000,
+  }),
+};
+```
+
 ### Custom Headers
 
-By default, only essential headers such as `Content-Type`, `Cache-Control`, and `Connection` are included in the response. To send additional headers, use the `customHeaders` option.
+By default, only essential headers such as `Content-Type`, `Cache-Control`, and `Connection` are included in the response. To send additional headers, use the `customHeaders` option. Essential SSE headers always take precedence and cannot be overridden.
 
 ```typescript
 import { sse } from "cloudflare-workers-sse";

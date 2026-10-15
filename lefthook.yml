@@ -1,6 +1,6 @@
 pre-commit:
   commands:
-    check:
-      run: npm run check
+    format:
+      run: npm run format
     test:
       run: npm run test
